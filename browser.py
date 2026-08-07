@@ -8,11 +8,39 @@ import tkinter
 
 
 WIDTH, HEIGHT = 800, 600
+HSTEP, VSTEP = 13, 18
+SCROLL_STEP = 100
 
 origen = "file://local/index.html"
 SOCKETS = {}
 MAX_REDIRECTS = 10
 CACHE = {}
+
+#####################################
+# FUNCTION UTILS
+#####################################
+
+def lex(body):
+        text = ""
+        in_tag = False
+        for c in body:
+            if c == "<":
+                in_tag = True
+            elif c == ">":
+                in_tag = False
+            elif not in_tag:
+                text += c
+
+        text = text.replace("&lt;", "<")
+        text = text.replace("&gt;", ">")
+        text = text.replace("&amp;", "&")
+        text = text.replace("&quot;", '"')
+        return text
+ 
+
+#####################################
+# BROWSER CLASS
+#####################################
 
 class Browser:
     def __init__(self):
@@ -23,13 +51,53 @@ class Browser:
             height=HEIGHT
         )
         self.canvas.pack()
+        self.display_list = []
+        self.scroll = 0
+        self.window.bind("<Down>", self.scrolldown)
+        self.window.bind("<Up>", self.scrollup)
+
+    def layout(self, text):
+        self.display_list = []
+        cursor_x, cursor_y = HSTEP, VSTEP
+        for c in text:
+            self.display_list.append((cursor_x, cursor_y, c))
+            cursor_x += HSTEP
+            if cursor_x >= WIDTH - HSTEP:
+                cursor_y += VSTEP
+                cursor_x = HSTEP
+        return self.display_list     
+    
+    def draw(self):
+        self.canvas.delete("all")
+        for x, y, c in self.display_list:
+            if y > self.scroll + HEIGHT: continue
+            if y + VSTEP < self.scroll: continue
+            self.canvas.create_text(x, y - self.scroll, text=c)
 
     def load(self, url):
-        # ...
-        self.canvas.create_rectangle(10, 20, 400, 300)
-        self.canvas.create_oval(100, 100, 150, 150)
-        self.canvas.create_text(200, 150, text="Hi!")    
+
+        url_obj = URL(url)
         
+        body = url_obj.request()
+        if url_obj.view_source:
+            text = body
+        else:
+            text = lex(body) 
+        self.display_list = self.layout(text)   
+        self.draw() 
+
+    def scrolldown(self, e):
+        self.scroll += SCROLL_STEP
+        self.draw()  
+
+    def scrollup(self, e):
+            self.scroll -= SCROLL_STEP
+            self.draw()      
+
+
+#####################################
+# URL CLASS
+#####################################         
 
 class URL:
 
@@ -245,29 +313,8 @@ class URL:
 
         return decoded_content
 
-    def show(self, body):
-        content = ""
-        in_tag = False
-        for c in body:
-            if c == "<":
-                in_tag = True
-            elif c == ">":
-                in_tag = False
-            elif not in_tag:
-                content += c
 
-        content = content.replace("&lt;", "<")
-        content = content.replace("&gt;", ">")
-        content = content.replace("&amp;", "&")
-        content = content.replace("&quot;", '"')
-        print(content)
 
-    def load(self):
-        body = self.request()
-        if self.view_source:
-            print(body)
-            return
-        self.show(body)
 
 
 if __name__ == "__main__":
@@ -275,7 +322,6 @@ if __name__ == "__main__":
         target_url = sys.argv[1]
     else:
         target_url = origen
-    link = URL(target_url)
-    link.load()
-    Browser().load(URL(sys.argv[1]))
+    browser = Browser()
+    browser.load(target_url)
     tkinter.mainloop()
