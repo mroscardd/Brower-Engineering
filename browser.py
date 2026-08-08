@@ -44,35 +44,72 @@ def lex(body):
 
 class Browser:
     def __init__(self):
+        self.width = WIDTH
+        self.height = HEIGHT
+        self.cursor_x = HSTEP
+        self.cursor_y = VSTEP
         self.window = tkinter.Tk()
         self.canvas = tkinter.Canvas(
             self.window, 
-            width=WIDTH,
-            height=HEIGHT
+            width=self.width,
+            height=self.height
         )
-        self.canvas.pack()
+
+        self.text = ""
+        self.canvas.pack(fill="both", expand=True)
         self.display_list = []
         self.scroll = 0
         self.window.bind("<Down>", self.scrolldown)
         self.window.bind("<Up>", self.scrollup)
+        self.window.bind("<Button-4>", self.scrollup)
+        self.window.bind("<Button-5>", self.scrolldown)
+        self.window.bind("<MouseWheel>", self.on_mousewheel)
+        self.window.bind("<Configure>", self.on_resize)
 
     def layout(self, text):
         self.display_list = []
-        cursor_x, cursor_y = HSTEP, VSTEP
+        self.cursor_x, self.cursor_y = HSTEP, VSTEP
+        counnter = 0 
         for c in text:
-            self.display_list.append((cursor_x, cursor_y, c))
-            cursor_x += HSTEP
-            if cursor_x >= WIDTH - HSTEP:
-                cursor_y += VSTEP
-                cursor_x = HSTEP
+            if c == "\r":
+                continue
+            if c == "\n":
+                if self.cursor_x > HSTEP:
+                    self.cursor_x = HSTEP
+                    self.cursor_y += VSTEP * 2
+                continue
+
+            self.display_list.append((self.cursor_x, self.cursor_y, c))
+            self.cursor_x += HSTEP
+
+            if self.cursor_x >= self.width - HSTEP:
+                self.cursor_y += VSTEP
+                self.cursor_x = HSTEP
         return self.display_list     
     
     def draw(self):
         self.canvas.delete("all")
         for x, y, c in self.display_list:
-            if y > self.scroll + HEIGHT: continue
+            if y > self.scroll + self.height: continue
             if y + VSTEP < self.scroll: continue
             self.canvas.create_text(x, y - self.scroll, text=c)
+
+        total_heigth = self.display_list[-1][1] + VSTEP 
+        if total_heigth > self.height:
+            scrollbar_width = 10
+            x0 = self.width - scrollbar_width
+            x1 =self.width
+
+            scrollbar_h = (self.height / total_heigth) * self.height
+            scrollbar_y = (self.scroll / total_heigth) * self.height
+
+            self.canvas.create_rectangle(
+                x0, 
+                scrollbar_y,
+                x1,
+                scrollbar_y + scrollbar_h,
+                fill="blue",
+                outline="",)  
 
     def load(self, url):
 
@@ -83,17 +120,36 @@ class Browser:
             text = body
         else:
             text = lex(body) 
-        self.display_list = self.layout(text)   
+        self.text = text    
+        self.display_list = self.layout(self.text)   
         self.draw() 
 
     def scrolldown(self, e):
-        self.scroll += SCROLL_STEP
-        self.draw()  
+            last_y = self.display_list[-1][1]
+            if self.scroll <= last_y - self.height:
+                self.scroll += SCROLL_STEP
+                self.draw()  
 
     def scrollup(self, e):
+        if self.scroll >= VSTEP:
             self.scroll -= SCROLL_STEP
             self.draw()      
+    def on_mousewheel(self, e):
+        # En Windows/macOS e.delta indica la dirección
+        if e.delta > 0:
+            self.scrollup(e)
+        else:
+            self.scrolldown(e)
 
+    def on_resize(self, e):
+        if e.width == self.width and e.height == self.height:
+            return
+        self.width = e.width
+        self.height = e.height
+        if self.text:
+            self.display_list = self.layout(self.text)
+            self.draw()
+                
 
 #####################################
 # URL CLASS
