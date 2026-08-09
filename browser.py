@@ -4,6 +4,8 @@ import ssl
 import sys
 import time
 import tkinter
+import os
+from PIL import Image, ImageTk
 
 
 
@@ -54,11 +56,13 @@ class Browser:
             width=self.width,
             height=self.height
         )
-
+        self.rtl = False
         self.text = ""
         self.canvas.pack(fill="both", expand=True)
         self.display_list = []
         self.scroll = 0
+        self.emoji_cache = {}
+        self.emoji_dir = "emojis"
         self.window.bind("<Down>", self.scrolldown)
         self.window.bind("<Up>", self.scrollup)
         self.window.bind("<Button-4>", self.scrollup)
@@ -67,64 +71,138 @@ class Browser:
         self.window.bind("<Configure>", self.on_resize)
 
     def layout(self, text):
+
         self.display_list = []
-        self.cursor_x, self.cursor_y = HSTEP, VSTEP
-        counnter = 0 
-        for c in text:
-            if c == "\r":
-                continue
-            if c == "\n":
-                if self.cursor_x > HSTEP:
+        
+        if self.rtl == False:
+            self.cursor_x, self.cursor_y = HSTEP, VSTEP
+            for c in text:
+                if c == "\r":
+                    continue
+                if c == "\n":
+                    if self.cursor_x > HSTEP:
+                        self.cursor_x = HSTEP
+                        self.cursor_y += VSTEP * 2
+                    continue
+
+                self.display_list.append((self.cursor_x, self.cursor_y, c))
+                self.cursor_x += HSTEP
+
+                if self.cursor_x >= self.width - HSTEP:
+                    self.cursor_y += VSTEP
                     self.cursor_x = HSTEP
-                    self.cursor_y += VSTEP * 2
-                continue
 
-            self.display_list.append((self.cursor_x, self.cursor_y, c))
-            self.cursor_x += HSTEP
-
-            if self.cursor_x >= self.width - HSTEP:
-                self.cursor_y += VSTEP
-                self.cursor_x = HSTEP
+        else: 
+            self.cursor_x, self.cursor_y = self.width - HSTEP  , VSTEP
+            for c in text:
+                if c == "\r":
+                    continue
+                if c == "\n":
+                    if self.cursor_x < self.width - HSTEP:
+                        self.cursor_x = self.width - HSTEP
+                        self.cursor_y += VSTEP * 2
+                    continue
+                
+                self.display_list.append((self.cursor_x, self.cursor_y, c))
+                self.cursor_x -= HSTEP
+                
+                if self.cursor_x <= HSTEP:
+                    self.cursor_y += VSTEP
+                    self.cursor_x = self.width - HSTEP   
         return self.display_list     
+
+    def get_emoji(self, char):
+        code = f"{ord(char):04X}"
+
+        if code in self.emoji_cache:
+            return self.emoji_cache[code]
+
+        path = os.path.join(self.emoji_dir, f"{code}.png")
+
+        if os.path.exists(path):
+            try:
+                # Abrimos y redimensionamos a 16x16 usando Pillow
+                pil_img = Image.open(path).resize(
+                    (16, 16), Image.Resampling.LANCZOS
+                )
+                photo = ImageTk.PhotoImage(pil_img)
+
+                # Guardamos en la caché
+                self.emoji_cache[code] = photo
+                return photo
+            except Exception:
+                self.emoji_cache[code] = None
+                return None
+        else:
+            # Marcamos como None para no reintentar buscar en disco caracteres normales
+            self.emoji_cache[code] = None
+            return None
+
     
     def draw(self):
         self.canvas.delete("all")
         for x, y, c in self.display_list:
             if y > self.scroll + self.height: continue
             if y + VSTEP < self.scroll: continue
-            self.canvas.create_text(x, y - self.scroll, text=c)
 
-        total_heigth = self.display_list[-1][1] + VSTEP 
-        if total_heigth > self.height:
-            scrollbar_width = 10
-            x0 = self.width - scrollbar_width
-            x1 =self.width
+            emoji_img = self.get_emoji(c)
 
-            scrollbar_h = (self.height / total_heigth) * self.height
-            scrollbar_y = (self.scroll / total_heigth) * self.height
+            if emoji_img:
+                # Dibujar la imagen del emoji
+                self.canvas.create_image(
+                    x, y - self.scroll, image=emoji_img, anchor="nw"
+                )
+            else:
+                # Dibujar como texto normal
+                self.canvas.create_text(
+                    x,
+                    y - self.scroll,
+                    text=c,
+                    anchor="nw",
+                    font=("Courier", 12),
+                )
 
-            self.canvas.create_rectangle(
-                x0, 
-                scrollbar_y,
-                x1,
-                scrollbar_y + scrollbar_h,
-                fill="blue",
-                outline="",)  
+        if self.display_list != []:  
+            total_heigth = self.display_list[-1][1] + VSTEP 
 
-    def load(self, url):
+            if total_heigth > self.height:
+                scrollbar_width = 10
+                x0 = self.width - scrollbar_width
+                x1 =self.width
 
-        url_obj = URL(url)
-        
-        body = url_obj.request()
-        if url_obj.view_source:
+                scrollbar_h = (self.height / total_heigth) * self.height
+                scrollbar_y = (self.scroll / total_heigth) * self.height
+
+                self.canvas.create_rectangle(
+                    x0, 
+                    scrollbar_y,
+                    x1,
+                    scrollbar_y + scrollbar_h,
+                    fill="blue",
+                    outline="",)  
+
+    def load(self, url, rtl):
+        self.rtl = rtl
+        try :
+            url_obj = URL(url)
+            body = url_obj.request()
+        except Exception:
+            url_obj = URL("about:blank")
+            body = url_obj.request()    
+
+
+        if hasattr(url_obj, "view_source") and url_obj.view_source:
             text = body
         else:
             text = lex(body) 
-        self.text = text    
+        self.text = text   
+
         self.display_list = self.layout(self.text)   
+ 
         self.draw() 
 
     def scrolldown(self, e):
+        if self.display_list != []:        
             last_y = self.display_list[-1][1]
             if self.scroll <= last_y - self.height:
                 self.scroll += SCROLL_STEP
@@ -159,6 +237,11 @@ class URL:
 
     def __init__(self, url=origen):
         self.raw_url = url
+
+        if url == "about:blank":
+            self.scheme = "about"
+            self.path = "blank"
+            return
 
         if url.startswith("view-source:"):
             self.view_source = True
@@ -218,6 +301,9 @@ class URL:
 
         if redirect_count > MAX_REDIRECTS:
             raise Exception("Límite de redirecciones excedido.")
+
+        if self.scheme == "about" and self.path == "blank":
+            return ""
 
         if self.scheme == "file":
             with open(self.path, "r", encoding="utf8") as f:
@@ -371,13 +457,18 @@ class URL:
 
 
 
-
-
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
+    rtl = False
+    if len(sys.argv) < 3:
+
         target_url = sys.argv[1]
-    else:
-        target_url = origen
+    else: 
+        target_url = sys.argv[1]
+        read_direction = sys.argv[2]
+        if read_direction == "--rtl":
+            rtl = True
+    
+    
     browser = Browser()
-    browser.load(target_url)
+    browser.load(target_url, rtl)
     tkinter.mainloop()
