@@ -119,6 +119,7 @@ class Layout:
         self.weight = "normal"
         self.style = "roman"
         self.size = 12
+        self.text_align = "left" 
 
         for tok in tokens:
             if isinstance(tok, Text):
@@ -163,7 +164,16 @@ class Layout:
             self.flush()   
         elif tag == "/p":
             self.flush()
-            self.cursor_y += VSTEP     
+            self.cursor_y += VSTEP  
+        elif tag == 'h1 class="title"':
+            self.flush()    
+            self.text_align = "center" 
+            self.size += 6
+        elif tag == "/h1":
+            self.flush()
+            self.text_align = "left" 
+            self.size -= 6 
+            self.cursor_y += VSTEP    
 
     def flush(self):
         if not self.line:
@@ -175,9 +185,17 @@ class Layout:
 
         baseline = self.cursor_y + 1.25 * max_ascent
 
+        if self.text_align == "center":
+            last_x, last_word, last_font = self.line[-1]
+            line_width = (last_x + last_font.measure(last_word)) - HSTEP
+            margin = (self.width - 2 * HSTEP) - line_width
+
+            offset = max(0, margin / 2)
+        else: 
+            offset = 0 
         for x, word, font in self.line:
             y = baseline - font.metrics("ascent")
-            self.display_list.append((x, y, word, font))
+            self.display_list.append((x + offset, y, word, font))
 
         self.cursor_x = HSTEP
         self.line = []
