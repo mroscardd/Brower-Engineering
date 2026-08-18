@@ -120,6 +120,7 @@ class Layout:
         self.style = "roman"
         self.size = 12
         self.text_align = "left" 
+        self.align_sup = "off" 
 
         for tok in tokens:
             if isinstance(tok, Text):
@@ -173,7 +174,13 @@ class Layout:
             self.flush()
             self.text_align = "left" 
             self.size -= 6 
-            self.cursor_y += VSTEP    
+            self.cursor_y += VSTEP   
+        elif tag == "sup":
+            self.align_sup = "on"
+            self.size = self.size //  2
+        elif tag == "/sup":
+            self.size = self.size * 2     
+            self.align_sup = "off" 
 
     def flush(self):
         if not self.line:
@@ -193,10 +200,15 @@ class Layout:
             offset = max(0, margin / 2)
         else: 
             offset = 0 
+
+           
         for x, word, font in self.line:
             y = baseline - font.metrics("ascent")
-            self.display_list.append((x + offset, y, word, font))
+            if self.align_sup == "on":
+                y -= font.metrics("ascent") * 0.4
 
+            self.display_list.append((x + offset, y, word, font))
+                
         self.cursor_x = HSTEP
         self.line = []
         self.cursor_y += 1.25 * (max_ascent + max_descent)
