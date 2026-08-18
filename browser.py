@@ -3,6 +3,7 @@ import ssl
 import sys
 import tkinter
 import tkinter.font
+import re
 
 HSTEP, VSTEP = 13, 18
 SCROLL_STEP = 100
@@ -121,6 +122,7 @@ class Layout:
         self.size = 12
         self.text_align = "left" 
         self.align_sup = "off" 
+        self.abbr = "off"
 
         for tok in tokens:
             if isinstance(tok, Text):
@@ -135,11 +137,44 @@ class Layout:
             self.word(word)
 
     def word(self, word):
+
         font = get_font(self.size, self.weight, self.style)
-        w = font.measure(word)
+
+        if self.abbr == "on":
+            for c in word:
+                # Comprobamos el carácter original ANTES de pasarlo a mayúscula
+                if c.islower():
+                    # Solo las minúsculas originales cambian a mayúscula, tamaño pequeño y negrita
+                    char_to_draw = c.upper()
+                    char_font = get_font(self.size - 2, "bold", self.style)
+                else:
+                    # Las mayúsculas originales, números y símbolos mantienen la fuente base
+                    char_to_draw = c
+                    char_font = font
+
+                cw = char_font.measure(char_to_draw)
+
+                # Comprobación de salto de línea si el carácter no cabe
+                if self.cursor_x + cw > self.width - HSTEP:
+                    self.flush()
+
+                self.line.append((self.cursor_x, char_to_draw, char_font))
+                self.cursor_x += cw
+
+            # Añadimos el espacio correspondiente al final de la palabra
+            space_w = font.measure(" ")
+            if self.cursor_x + space_w > self.width - HSTEP:
+                self.flush()
+            else:
+                self.cursor_x += space_w
+            return
+        
+        w = font.measure(word)        
 
         if self.cursor_x + w > self.width - HSTEP:
+
             self.flush()
+
 
         self.line.append((self.cursor_x, word, font))
         self.cursor_x += w + font.measure(" ")
@@ -162,18 +197,20 @@ class Layout:
         elif tag == "/big":
             self.size -= 4
         elif tag == "br":
-            self.flush()   
+            self.flush()  
+        elif tag == "p":
+            self.flush()
         elif tag == "/p":
             self.flush()
             self.cursor_y += VSTEP  
         elif tag == 'h1 class="title"':
             self.flush()    
             self.text_align = "center" 
-            self.size += 6
+            self.size = 18
         elif tag == "/h1":
             self.flush()
             self.text_align = "left" 
-            self.size -= 6 
+            self.size = 12
             self.cursor_y += VSTEP   
         elif tag == "sup":
             self.align_sup = "on"
@@ -181,6 +218,12 @@ class Layout:
         elif tag == "/sup":
             self.size = self.size * 2     
             self.align_sup = "off" 
+        elif tag == "abbr":
+            self.abbr = "on"
+        elif tag == "/abbr":
+            self.abbr = "off"    
+            
+
 
     def flush(self):
         if not self.line:
