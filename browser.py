@@ -1,266 +1,62 @@
-import gzip
 import socket
 import ssl
 import sys
-import time
 import tkinter
-import os
-from PIL import Image, ImageTk
+import tkinter.font
 
-
-
-WIDTH, HEIGHT = 800, 600
 HSTEP, VSTEP = 13, 18
 SCROLL_STEP = 100
 
-origen = "file://local/index.html"
-SOCKETS = {}
-MAX_REDIRECTS = 10
-CACHE = {}
+FONTS = {}
 
-#####################################
-# FUNCTION UTILS
-#####################################
+
+def get_font(size, weight, style):
+    key = (size, weight, style)
+    if key not in FONTS:
+        font = tkinter.font.Font(size=size, weight=weight, slant=style)
+        label = tkinter.Label(font=font)
+        FONTS[key] = (font, label)
+    return FONTS[key][0]
+
+
+class Text:
+
+    def __init__(self, text):
+        self.text = text
+
+
+class Tag:
+
+    def __init__(self, tag):
+        self.tag = tag
+
 
 def lex(body):
-        text = ""
-        in_tag = False
-        for c in body:
-            if c == "<":
-                in_tag = True
-            elif c == ">":
-                in_tag = False
-            elif not in_tag:
-                text += c
-
-        text = text.replace("&lt;", "<")
-        text = text.replace("&gt;", ">")
-        text = text.replace("&amp;", "&")
-        text = text.replace("&quot;", '"')
-        return text
- 
-
-#####################################
-# BROWSER CLASS
-#####################################
-
-class Browser:
-    def __init__(self):
-        self.width = WIDTH
-        self.height = HEIGHT
-        self.cursor_x = HSTEP
-        self.cursor_y = VSTEP
-        self.window = tkinter.Tk()
-        self.canvas = tkinter.Canvas(
-            self.window, 
-            width=self.width,
-            height=self.height
-        )
-        self.rtl = False
-        self.text = ""
-        self.canvas.pack(fill="both", expand=True)
-        self.display_list = []
-        self.scroll = 0
-        self.emoji_cache = {}
-        self.emoji_dir = "emojis"
-        self.window.bind("<Down>", self.scrolldown)
-        self.window.bind("<Up>", self.scrollup)
-        self.window.bind("<Button-4>", self.scrollup)
-        self.window.bind("<Button-5>", self.scrolldown)
-        self.window.bind("<MouseWheel>", self.on_mousewheel)
-        self.window.bind("<Configure>", self.on_resize)
-
-    def layout(self, text):
-
-        self.display_list = []
-        
-        if self.rtl == False:
-            self.cursor_x, self.cursor_y = HSTEP, VSTEP
-            for c in text:
-                if c == "\r":
-                    continue
-                if c == "\n":
-                    if self.cursor_x > HSTEP:
-                        self.cursor_x = HSTEP
-                        self.cursor_y += VSTEP * 2
-                    continue
-
-                self.display_list.append((self.cursor_x, self.cursor_y, c))
-                self.cursor_x += HSTEP
-
-                if self.cursor_x >= self.width - HSTEP:
-                    self.cursor_y += VSTEP
-                    self.cursor_x = HSTEP
-
-        else: 
-            self.cursor_x, self.cursor_y = self.width - HSTEP  , VSTEP
-            for c in text:
-                if c == "\r":
-                    continue
-                if c == "\n":
-                    if self.cursor_x < self.width - HSTEP:
-                        self.cursor_x = self.width - HSTEP
-                        self.cursor_y += VSTEP * 2
-                    continue
-                
-                self.display_list.append((self.cursor_x, self.cursor_y, c))
-                self.cursor_x -= HSTEP
-                
-                if self.cursor_x <= HSTEP:
-                    self.cursor_y += VSTEP
-                    self.cursor_x = self.width - HSTEP   
-        return self.display_list     
-
-    def get_emoji(self, char):
-        code = f"{ord(char):04X}"
-
-        if code in self.emoji_cache:
-            return self.emoji_cache[code]
-
-        path = os.path.join(self.emoji_dir, f"{code}.png")
-
-        if os.path.exists(path):
-            try:
-                # Abrimos y redimensionamos a 16x16 usando Pillow
-                pil_img = Image.open(path).resize(
-                    (16, 16), Image.Resampling.LANCZOS
-                )
-                photo = ImageTk.PhotoImage(pil_img)
-
-                # Guardamos en la caché
-                self.emoji_cache[code] = photo
-                return photo
-            except Exception:
-                self.emoji_cache[code] = None
-                return None
+    out = []
+    buffer = ""
+    in_tag = False
+    for c in body:
+        if c == "<":
+            in_tag = True
+            if buffer:
+                out.append(Text(buffer))
+            buffer = ""
+        elif c == ">":
+            in_tag = False
+            out.append(Tag(buffer))
+            buffer = ""
         else:
-            # Marcamos como None para no reintentar buscar en disco caracteres normales
-            self.emoji_cache[code] = None
-            return None
+            buffer += c
+    if not in_tag and buffer:
+        out.append(Text(buffer))
+    return out
 
-    
-    def draw(self):
-        self.canvas.delete("all")
-        for x, y, c in self.display_list:
-            if y > self.scroll + self.height: continue
-            if y + VSTEP < self.scroll: continue
-
-            emoji_img = self.get_emoji(c)
-
-            if emoji_img:
-                # Dibujar la imagen del emoji
-                self.canvas.create_image(
-                    x, y - self.scroll, image=emoji_img, anchor="nw"
-                )
-            else:
-                # Dibujar como texto normal
-                self.canvas.create_text(
-                    x,
-                    y - self.scroll,
-                    text=c,
-                    anchor="nw",
-                    font=("Courier", 12),
-                )
-
-        if self.display_list != []:  
-            total_heigth = self.display_list[-1][1] + VSTEP 
-
-            if total_heigth > self.height:
-                scrollbar_width = 10
-                x0 = self.width - scrollbar_width
-                x1 =self.width
-
-                scrollbar_h = (self.height / total_heigth) * self.height
-                scrollbar_y = (self.scroll / total_heigth) * self.height
-
-                self.canvas.create_rectangle(
-                    x0, 
-                    scrollbar_y,
-                    x1,
-                    scrollbar_y + scrollbar_h,
-                    fill="blue",
-                    outline="",)  
-
-    def load(self, url, rtl):
-        self.rtl = rtl
-        try :
-            url_obj = URL(url)
-            body = url_obj.request()
-        except Exception:
-            url_obj = URL("about:blank")
-            body = url_obj.request()    
-
-
-        if hasattr(url_obj, "view_source") and url_obj.view_source:
-            text = body
-        else:
-            text = lex(body) 
-        self.text = text   
-
-        self.display_list = self.layout(self.text)   
- 
-        self.draw() 
-
-    def scrolldown(self, e):
-        if self.display_list != []:        
-            last_y = self.display_list[-1][1]
-            if self.scroll <= last_y - self.height:
-                self.scroll += SCROLL_STEP
-                self.draw()  
-
-    def scrollup(self, e):
-        if self.scroll >= VSTEP:
-            self.scroll -= SCROLL_STEP
-            self.draw()      
-    def on_mousewheel(self, e):
-        # En Windows/macOS e.delta indica la dirección
-        if e.delta > 0:
-            self.scrollup(e)
-        else:
-            self.scrolldown(e)
-
-    def on_resize(self, e):
-        if e.width == self.width and e.height == self.height:
-            return
-        self.width = e.width
-        self.height = e.height
-        if self.text:
-            self.display_list = self.layout(self.text)
-            self.draw()
-                
-
-#####################################
-# URL CLASS
-#####################################         
 
 class URL:
 
-    def __init__(self, url=origen):
-        self.raw_url = url
-
-        if url == "about:blank":
-            self.scheme = "about"
-            self.path = "blank"
-            return
-
-        if url.startswith("view-source:"):
-            self.view_source = True
-            _, url = url.split("view-source:", 1)
-        else:
-            self.view_source = False
-
-        if "://" in url:
-            self.scheme, url = url.split("://", 1)
-        else:
-            self.scheme, url = url.split(":", 1)
-
-        assert self.scheme in ["http", "https", "file", "data"]
-
-        self.host = None
-        self.port = None
-        if self.scheme == "file" or self.scheme == "data":
-            self.path = url
-            return
+    def __init__(self, url):
+        self.scheme, url = url.split("://", 1)
+        assert self.scheme in ["http", "https"]
 
         if "/" not in url:
             url = url + "/"
@@ -276,199 +72,192 @@ class URL:
             self.host, port = self.host.split(":", 1)
             self.port = int(port)
 
-    def full_url(self):
-        if self.scheme in ["file", "data"]:
-            return f"{self.scheme}:{self.path}"
-        return f"{self.scheme}://{self.host}:{self.port}{self.path}"
+    def request(self):
+        s = socket.socket(
+            family=socket.AF_INET,
+            type=socket.SOCK_STREAM,
+            proto=socket.IPPROTO_TCP,
+        )
+        s.connect((self.host, self.port))
 
-    def resolve_relative_url(self, location):
-        if "://" in location:
-            return location
-        if location.startswith("//"):
-            return f"{self.scheme}:{location}"
-        if location.startswith("/"):
-            port_suffix = ""
-            if (self.scheme == "http" and self.port != 80) or (
-                self.scheme == "https" and self.port != 443
-            ):
-                port_suffix = f":{self.port}"
-            return f"{self.scheme}://{self.host}{port_suffix}{location}"
+        if self.scheme == "https":
+            ctx = ssl.create_default_context()
+            s = ctx.wrap_socket(s, server_hostname=self.host)
 
-        dir_path = self.path.rsplit("/", 1)[0]
-        return f"{self.scheme}://{self.host}:{self.port}{dir_path}/{location}"
+        request = f"GET {self.path} HTTP/1.0\r\n"
+        request += f"Host: {self.host}\r\n"
+        request += "\r\n"
 
-    def request(self, redirect_count=0):
+        s.send(request.encode("utf8"))
+        response = s.makefile("rb")
 
-        if redirect_count > MAX_REDIRECTS:
-            raise Exception("Límite de redirecciones excedido.")
-
-        if self.scheme == "about" and self.path == "blank":
-            return ""
-
-        if self.scheme == "file":
-            with open(self.path, "r", encoding="utf8") as f:
-                return f.read()
-
-        if self.scheme == "data":
-            if "," in self.path:
-                media_type, content = self.path.split(",", 1)
-                return content
-            return ""
-
-        current_url = self.full_url()
-        if current_url in CACHE:
-            expires_at, cached_content = CACHE[current_url]
-            if time.time() < expires_at:
-                return cached_content
-
-        while True:
-            if (self.host, self.port) in SOCKETS:
-                s = SOCKETS[(self.host, self.port)]
-            else:
-                s = socket.socket(
-                    family=socket.AF_INET,
-                    type=socket.SOCK_STREAM,
-                    proto=socket.IPPROTO_TCP,
-                )
-                s.connect((self.host, self.port))
-                if self.scheme == "https":
-                    ctx = ssl.create_default_context()
-                    s = ctx.wrap_socket(s, server_hostname=self.host)
-
-                SOCKETS[(self.host, self.port)] = s
-
-            # EJERCICIO 1-9: Anunciar soporte para compresión gzip
-            request_headers = {
-                "Host": self.host,
-                "Connection": "keep-alive",
-                "User-Agent": "MiNavegador/1.0",
-                "Accept-Encoding": "gzip",
-            }
-
-            request = f"GET {self.path} HTTP/1.1\r\n"
-            for header, value in request_headers.items():
-                request += f"{header}: {value}\r\n"
-            request += "\r\n"
-
-            try:
-                s.send(request.encode("utf8"))
-                response = s.makefile("rb")
-
-                statusline_bytes = response.readline()
-                if not statusline_bytes:
-                    del SOCKETS[(self.host, self.port)]
-                    s.close()
-                    continue
-
-                statusline = statusline_bytes.decode("utf-8")
-                version, status, explanation = statusline.split(" ", 2)
-                break
-
-            except (OSError, ConnectionResetError):
-                if (self.host, self.port) in SOCKETS:
-                    del SOCKETS[(self.host, self.port)]
-                s.close()
+        statusline = response.readline().decode("utf-8")
+        version, status, explanation = statusline.split(" ", 2)
 
         response_headers = {}
         while True:
-            line_bytes = response.readline()
-            line = line_bytes.decode("utf-8")
-            if line == "\r\n" or line == "\n":
+            line = response.readline().decode("utf-8")
+            if line in ("\r\n", "\n"):
                 break
             header, value = line.split(":", 1)
             response_headers[header.casefold()] = value.strip()
 
-        # Redirecciones (3xx)
-        if 300 <= int(status) < 400 and "location" in response_headers:
-            new_location = response_headers["location"]
-            new_url_str = self.resolve_relative_url(new_location)
+        content = response.read()
+        s.close()
 
-            if self.view_source:
-                new_url_str = "view-source:" + new_url_str
+        return content.decode("utf-8", errors="replace")
 
-            new_url = URL(new_url_str)
-            return new_url.request(redirect_count=redirect_count + 1)
 
-        # EJERCICIO 1-9: Lectura del cuerpo según Transfer-Encoding o Content-Length
-        content = b""
-        transfer_encoding = response_headers.get("transfer-encoding", "")
+class Layout:
 
-        if "chunked" in transfer_encoding.lower():
-            # Parsear codificación por fragmentos (chunked)
-            while True:
-                line = response.readline()
-                if not line:
-                    break
-                # Extraer la longitud hexadecimal (ignorando parámetros tras ';')
-                hex_len = line.split(b";")[0].strip()
-                if not hex_len:
-                    continue
-                chunk_len = int(hex_len, 16)
-                if chunk_len == 0:
-                    # Consumir líneas de tráiler finales
-                    while True:
-                        trailer = response.readline()
-                        if trailer in (b"\r\n", b"\n", b""):
-                            break
-                    break
-                chunk_data = response.read(chunk_len)
-                content += chunk_data
-                response.readline()  # Consumir la secuencia \r\n que sigue a cada chunk
-        elif "content-length" in response_headers:
-            n_bytes = int(response_headers["content-length"])
-            content = response.read(n_bytes)
+    def __init__(self, tokens, width):
+        self.display_list = []
+        self.line = []
+        self.width = width
+        self.cursor_x = HSTEP
+        self.cursor_y = VSTEP
+        self.weight = "normal"
+        self.style = "roman"
+        self.size = 12
+
+        for tok in tokens:
+            if isinstance(tok, Text):
+                self.text(tok.text)
+            elif isinstance(tok, Tag):
+                self.tag(tok.tag)
+
+        self.flush()
+
+    def text(self, text):
+        for word in text.split():
+            self.word(word)
+
+    def word(self, word):
+        font = get_font(self.size, self.weight, self.style)
+        w = font.measure(word)
+
+        if self.cursor_x + w > self.width - HSTEP:
+            self.flush()
+
+        self.line.append((self.cursor_x, word, font))
+        self.cursor_x += w + font.measure(" ")
+
+    def tag(self, tag):
+        if tag == "b":
+            self.weight = "bold"
+        elif tag == "/b":
+            self.weight = "normal"
+        elif tag == "i":
+            self.style = "italic"
+        elif tag == "/i":
+            self.style = "roman"
+        elif tag == "small":
+            self.size -= 2
+        elif tag == "/small":
+            self.size += 2
+        elif tag == "big":
+            self.size += 4
+        elif tag == "/big":
+            self.size -= 4
+        elif tag == "br":
+            self.flush()   
+        elif tag == "/p":
+            self.flush()
+            self.cursor_y += VSTEP     
+
+    def flush(self):
+        if not self.line:
+            return
+
+        metrics = [font.metrics() for x, word, font in self.line]
+        max_ascent = max([metric["ascent"] for metric in metrics])
+        max_descent = max([metric["descent"] for metric in metrics])
+
+        baseline = self.cursor_y + 1.25 * max_ascent
+
+        for x, word, font in self.line:
+            y = baseline - font.metrics("ascent")
+            self.display_list.append((x, y, word, font))
+
+        self.cursor_x = HSTEP
+        self.line = []
+        self.cursor_y += 1.25 * (max_ascent + max_descent)
+
+
+class Browser:
+
+    def __init__(self):
+        self.width = 800
+        self.height = 600
+        self.window = tkinter.Tk()
+        self.canvas = tkinter.Canvas(
+            self.window,
+            width=self.width,
+            height=self.height,
+        )
+        self.canvas.pack(fill="both", expand=True)
+
+        self.display_list = []
+        self.scroll = 0
+        self.nodes = []
+
+        self.window.bind("<Down>", self.scrolldown)
+        self.window.bind("<Up>", self.scrollup)
+        self.window.bind("<MouseWheel>", self.on_mousewheel)
+        self.window.bind("<Configure>", self.on_resize)
+
+    def load(self, url):
+        body = URL(url).request()
+        self.nodes = lex(body)
+        self.display_list = Layout(self.nodes, self.width).display_list
+        self.draw()
+
+    def draw(self):
+        self.canvas.delete("all")
+
+        for x, y, word, font in self.display_list:
+            if y > self.scroll + self.height:
+                continue
+            if y + font.metrics("linespace") < self.scroll:
+                continue
+
+            self.canvas.create_text(
+                x,
+                y - self.scroll,
+                text=word,
+                font=font,
+                anchor="nw",
+            )
+
+    def scrolldown(self, e):
+        if self.display_list:
+            max_y = max(y for x, y, word, font in self.display_list)
+            if self.scroll < max_y - self.height:
+                self.scroll += SCROLL_STEP
+                self.draw()
+
+    def scrollup(self, e):
+        if self.scroll >= SCROLL_STEP:
+            self.scroll -= SCROLL_STEP
+            self.draw()
+
+    def on_mousewheel(self, e):
+        if e.delta > 0:
+            self.scrollup(e)
         else:
-            if (self.host, self.port) in SOCKETS:
-                del SOCKETS[(self.host, self.port)]
+            self.scrolldown(e)
 
-            s.settimeout(1.0)
-            try:
-                while True:
-                    chunk = response.read(1024)
-                    if not chunk:
-                        break
-                    content += chunk
-            except (socket.timeout, TimeoutError):
-                pass
-            finally:
-                s.close()
-
-        # EJERCICIO 1-9: Descomprimir si la respuesta viene codificada en gzip
-        content_encoding = response_headers.get("content-encoding", "")
-        if "gzip" in content_encoding.lower():
-            content = gzip.decompress(content)
-
-        decoded_content = content.decode("utf-8", errors="replace")
-
-        # Caché HTTP
-        cache_control = response_headers.get("cache-control", "")
-        if "no-store" not in cache_control:
-            for directive in cache_control.split(","):
-                directive = directive.strip()
-                if directive.startswith("max-age="):
-                    try:
-                        max_age = int(directive.split("=", 1)[1])
-                        expires_at = time.time() + max_age
-                        CACHE[current_url] = (expires_at, decoded_content)
-                    except ValueError:
-                        pass
-
-        return decoded_content
-
+    def on_resize(self, e):
+        if e.width == self.width and e.height == self.height:
+            return
+        self.width = e.width
+        self.height = e.height
+        if self.nodes:
+            self.display_list = Layout(self.nodes, self.width).display_list
+            self.draw()
 
 
 if __name__ == "__main__":
-    rtl = False
-    if len(sys.argv) < 3:
-
-        target_url = sys.argv[1]
-    else: 
-        target_url = sys.argv[1]
-        read_direction = sys.argv[2]
-        if read_direction == "--rtl":
-            rtl = True
-    
-    
     browser = Browser()
-    browser.load(target_url, rtl)
+    browser.load(sys.argv[1])
     tkinter.mainloop()
